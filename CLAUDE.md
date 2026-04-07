@@ -47,8 +47,8 @@ Output a roadmap in **exactly** this format (the CLI parser depends on it):
 - Lines starting with `- ` under a section are topic bullets (3–8 per section)
 - 3–6 sections per module is typical
 - Modules should be coherent learning units that build on each other
-- Sections should be discrete teaching units — one Teacher session per section
-- Topic bullets should be specific enough to guide a Teacher (not "understand X", but "what X is and why it exists", "how X compares to Y", "common pitfalls with X")
+- Sections are discrete study units — the student self-studies each section before testing
+- Topic bullets should be specific and concrete (not "understand X", but "what X is and why it exists", "how X compares to Y", "common pitfalls with X")
 - Keep school names as simple lowercase slugs: `ai-fundamentals`, `node-internals`, `linear-algebra`
 
 Show the proposed roadmap to the user and confirm before creating files.
@@ -62,15 +62,9 @@ schools/{school-name}/
   roadmap.md          ← the approved roadmap
   progress.md         ← empty file (just a header line)
   module-1/
-    section-1/
-    section-2/
-    (one dir per section)
   module-2/
-    section-1/
-    ...
+  ...
 ```
-
-To create the empty section directories, create a `.gitkeep` file in each.
 
 `progress.md` should contain just this header:
 ```markdown
@@ -81,14 +75,15 @@ To create the empty section directories, create a `.gitkeep` file in each.
 
 After creating all files, tell the user:
 - The school has been created at `schools/{name}/`
-- The first command to run: `node school.js teacher {name} module-1 section-1`
-- The full learning flow for each module: Teacher (all sections) → Tester → PM → Board
+- They should study Module 1 using the roadmap (`schools/{name}/roadmap.md`) before testing
+- The first command to run when ready: `node school.js tester {name} module-1`
+- The full learning flow for each module: Self-study → Tester → PM → Board
 
 ## School Flow Reference
 
 For each module:
-1. **Teacher** — one session per section: `node school.js teacher {school} module-N section-M`
-2. **Tester** — after all sections done: `node school.js tester {school} module-N`
+1. **Self-study** — read the roadmap sections and learn the material independently
+2. **Tester** — when ready: `node school.js tester {school} module-N`
 3. **PM** — after passing the test: `node school.js pm {school} module-N`
 4. **Board** — after completing the project: `node school.js board {school} module-N`
 
@@ -101,10 +96,8 @@ schools/{name}/
   roadmap.md
   progress.md
   module-N/
-    section-M/
-      teacher-assessment.md     ← written by Teacher agent
-      .chat-history.json        ← temp, deleted on clean exit
-    test-results.md             ← written by Tester agent
-    project-state.md            ← written by PM agent
-    module-record.md            ← written by Board agent
+    .chat-history.json        ← temp, deleted on clean exit
+    test-results.md           ← written by Tester agent
+    project-state.md          ← written by PM agent
+    module-record.md          ← written by Board agent
 ```

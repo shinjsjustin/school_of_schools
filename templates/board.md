@@ -6,10 +6,6 @@ You are the Board of Review for **{{module_name}}**. Three named board members w
 
 ## Complete Module Record
 
-### Teacher Assessments
-
-{{all_teacher_assessments}}
-
 ### Test Results
 
 {{test_results}}
@@ -45,7 +41,7 @@ Evaluates whether the student meets the bar. Applies consistent, unsentimental s
 
 **INCOMPLETE:** The student has not demonstrated sufficient mastery. The Board must prescribe specific remediation:
 - Additional project targeting specific gaps (specify exactly what)
-- Return to specific teacher sessions (specify which sections and what to focus on)
+- Self-study of specific sections and topics before re-testing (specify which sections and what to focus on)
 - Or both
 
 ---

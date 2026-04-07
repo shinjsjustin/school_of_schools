@@ -18,23 +18,18 @@ const TEMPLATES_DIR = path.join(__dirname, 'templates');
 // === CONSTANTS ===
 
 const MODELS = {
-  teacher: 'claude-sonnet-4-6',
   tester: 'claude-sonnet-4-6',
   pm: 'claude-sonnet-4-6',
   board: 'claude-sonnet-4-6',
 };
 
-const WEB_SEARCH_AGENTS = new Set(['teacher']);
-
 const MARKERS = {
-  teacher: { start: '---TEACHER ASSESSMENT---', end: '---END TEACHER ASSESSMENT---' },
   tester: { start: '---TEST RESULTS---', end: '---END TEST RESULTS---' },
   pm: { start: '---PROJECT STATE---', end: '---END PROJECT STATE---' },
   board: { start: '---MODULE RECORD---', end: '---END MODULE RECORD---' },
 };
 
 const KICKSTART = {
-  teacher: "I'm ready to begin learning.",
   tester: "I'm ready to take the module test.",
   pm: "Please review my learning progress and assign a project.",
   board: "The module work is complete. Please review and deliberate.",
@@ -111,68 +106,23 @@ function assembleTemplate(agentType, variables) {
 
 // === CONTEXT BUILDERS ===
 
-function getPriorAssessments(schoolDir, moduleNum, currentSectionNum) {
-  const parts = [];
-  for (let s = 1; s < currentSectionNum; s++) {
-    const p = path.join(schoolDir, `module-${moduleNum}`, `section-${s}`, 'teacher-assessment.md');
-    if (fs.existsSync(p)) {
-      parts.push(`### Section ${moduleNum}.${s}\n\n${fs.readFileSync(p, 'utf8')}`);
-    }
-  }
-  return parts.length > 0 ? parts.join('\n\n---\n\n') : '';
+function getModuleSections(moduleData) {
+  return moduleData.sections
+    .map(s => `### ${s.name}\n${s.topics.map(t => `- ${t}`).join('\n')}`)
+    .join('\n\n');
 }
 
-function getAllTeacherAssessments(schoolDir, moduleNum, roadmap) {
-  const moduleData = roadmap.modules.find(m => m.number === moduleNum);
-  if (!moduleData) return '';
-  const parts = [];
-  for (const section of moduleData.sections) {
-    const p = path.join(schoolDir, `module-${moduleNum}`, `section-${section.sectionIndex}`, 'teacher-assessment.md');
-    if (fs.existsSync(p)) {
-      parts.push(`### ${section.name}\n\n${fs.readFileSync(p, 'utf8')}`);
-    }
-  }
-  return parts.join('\n\n---\n\n');
-}
-
-function getStruggleContext(progressPath) {
-  const content = readFileSafe(progressPath);
-  if (!content) return '';
-  const weakAreas = [];
-  for (const match of content.matchAll(/\*\*Weak areas:\*\* (.+)/g)) {
-    const area = match[1].trim();
-    if (area && area.toLowerCase() !== 'none') weakAreas.push(area);
-  }
-  if (weakAreas.length === 0) return '';
-  return `Previously identified weak areas:\n${weakAreas.map(w => `- ${w}`).join('\n')}`;
-}
-
-function buildVariables(agent, schoolDir, moduleNum, sectionNum, moduleData, sectionData, progressPath, roadmap) {
-  const base = {
-    module_name: moduleData.name,
-    section_name: sectionData?.name ?? '',
-  };
-
-  if (agent === 'teacher') {
-    return {
-      ...base,
-      topic_bullets: (sectionData?.topics ?? []).map(t => `- ${t}`).join('\n'),
-      prior_assessments: sectionNum > 1 ? getPriorAssessments(schoolDir, moduleNum, sectionNum) : '',
-      struggle_context: getStruggleContext(progressPath),
-    };
-  }
-
+function buildVariables(agent, schoolDir, moduleNum, moduleData) {
+  const base = { module_name: moduleData.name };
   const moduleDir = path.join(schoolDir, `module-${moduleNum}`);
-  const allAssessments = getAllTeacherAssessments(schoolDir, moduleNum, roadmap);
 
   if (agent === 'tester') {
-    return { ...base, all_teacher_assessments: allAssessments };
+    return { ...base, module_sections: getModuleSections(moduleData) };
   }
 
   if (agent === 'pm') {
     return {
       ...base,
-      all_teacher_assessments: allAssessments,
       test_results: readFileSafe(path.join(moduleDir, 'test-results.md')),
     };
   }
@@ -180,7 +130,6 @@ function buildVariables(agent, schoolDir, moduleNum, sectionNum, moduleData, sec
   if (agent === 'board') {
     return {
       ...base,
-      all_teacher_assessments: allAssessments,
       test_results: readFileSafe(path.join(moduleDir, 'test-results.md')),
       project_state: readFileSafe(path.join(moduleDir, 'project-state.md')),
     };
@@ -316,11 +265,10 @@ async function promptYesNo(question) {
   });
 }
 
-function printStatus(agent, moduleData, sectionData, moduleDir) {
+function printStatus(agent, moduleData, moduleDir) {
   console.log(chalk.bold('\n─── Status ───'));
   console.log(`Agent:   ${chalk.cyan(agent)}`);
   console.log(`Module:  ${chalk.cyan(moduleData.name)}`);
-  if (sectionData) console.log(`Section: ${chalk.cyan(sectionData.name)}`);
   const stateFiles = ['test-results.md', 'project-state.md', 'module-record.md'];
   for (const f of stateFiles) {
     const exists = fs.existsSync(path.join(moduleDir, f));
@@ -329,7 +277,7 @@ function printStatus(agent, moduleData, sectionData, moduleDir) {
   console.log('──────────────\n');
 }
 
-async function finishSession({ block, stateFilePath, progressPath, historyPath, agent, moduleData, sectionData }) {
+async function finishSession({ block, stateFilePath, progressPath, historyPath, agent, moduleData }) {
   writeFileSafe(stateFilePath, block);
   console.log(chalk.green(`\n✓ Saved: ${stateFilePath}`));
 
@@ -337,7 +285,6 @@ async function finishSession({ block, stateFilePath, progressPath, historyPath, 
   updateProgress(progressPath, {
     agent,
     moduleName: moduleData.name,
-    sectionName: sectionData?.name ?? null,
     ...meta,
   });
   console.log(chalk.green(`✓ Progress log updated`));
@@ -346,40 +293,31 @@ async function finishSession({ block, stateFilePath, progressPath, historyPath, 
   console.log(chalk.bold.green(`\nSession complete.\n`));
 }
 
-async function runSession(client, { agent, school, module: moduleNum, section: sectionNum, forceResume }) {
+async function runSession(client, { agent, school, module: moduleNum, forceResume }) {
   const schoolDir = path.join(SCHOOLS_DIR, school);
   const roadmapPath = path.join(schoolDir, 'roadmap.md');
   const roadmap = parseRoadmap(roadmapPath);
   const moduleData = roadmap.modules.find(m => m.number === moduleNum);
-  const sectionData = sectionNum != null
-    ? moduleData?.sections.find(s => s.sectionIndex === sectionNum)
-    : null;
 
   const moduleDir = path.join(schoolDir, `module-${moduleNum}`);
-  const sessionDir = sectionNum != null ? path.join(moduleDir, `section-${sectionNum}`) : moduleDir;
-  const historyPath = path.join(sessionDir, '.chat-history.json');
+  const historyPath = path.join(moduleDir, '.chat-history.json');
   const progressPath = path.join(schoolDir, 'progress.md');
 
   const stateFilePaths = {
-    teacher: path.join(sessionDir, 'teacher-assessment.md'),
     tester: path.join(moduleDir, 'test-results.md'),
     pm: path.join(moduleDir, 'project-state.md'),
     board: path.join(moduleDir, 'module-record.md'),
   };
   const stateFilePath = stateFilePaths[agent];
 
-  const variables = buildVariables(agent, schoolDir, moduleNum, sectionNum, moduleData, sectionData, progressPath, roadmap);
+  const variables = buildVariables(agent, schoolDir, moduleNum, moduleData);
   const systemPrompt = assembleTemplate(agent, variables);
 
-  const makeParams = msgs => {
-    const p = { model: MODELS[agent], max_tokens: 8192, system: systemPrompt, messages: msgs };
-    if (WEB_SEARCH_AGENTS.has(agent)) {
-      p.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
-    }
-    return p;
-  };
+  const makeParams = msgs => ({
+    model: MODELS[agent], max_tokens: 8192, system: systemPrompt, messages: msgs,
+  });
 
-  const historyMeta = { agent, school, module: moduleNum, section: sectionNum };
+  const historyMeta = { agent, school, module: moduleNum };
   const agentLabel = chalk.bold.cyan(`[${agent.toUpperCase()}]`);
   const markers = MARKERS[agent];
 
@@ -411,8 +349,7 @@ async function runSession(client, { agent, school, module: moduleNum, section: s
     const allText = getFullAssistantText(messages);
     const block = extractBlock(allText, markers.start, markers.end);
     if (block) {
-      const finishContext = { block, stateFilePath, progressPath, historyPath, agent, moduleData, sectionData };
-      await finishSession(finishContext);
+      await finishSession({ block, stateFilePath, progressPath, historyPath, agent, moduleData });
       return;
     }
   }
@@ -429,13 +366,12 @@ async function runSession(client, { agent, school, module: moduleNum, section: s
 
       if (input === '/quit') {
         saveHistory(historyPath, { ...historyMeta, messages });
-        console.log(chalk.yellow('\nSession saved. Resume with: node school.js resume ' +
-          `${school} ${agent} module-${moduleNum}${sectionNum ? ` section-${sectionNum}` : ''}`));
+        console.log(chalk.yellow(`\nSession saved. Resume with: node school.js resume ${school} ${agent} module-${moduleNum}`));
         break;
       }
 
       if (input === '/status') {
-        printStatus(agent, moduleData, sectionData, moduleDir);
+        printStatus(agent, moduleData, moduleDir);
         continue;
       }
 
@@ -446,7 +382,7 @@ async function runSession(client, { agent, school, module: moduleNum, section: s
         const block = extractBlock(allText, markers.start, markers.end);
         if (block) {
           rl.close();
-          await finishSession({ block, stateFilePath, progressPath, historyPath, agent, moduleData, sectionData });
+          await finishSession({ block, stateFilePath, progressPath, historyPath, agent, moduleData });
           return;
         }
         userMessage = `Please provide your structured ${agent} output now, formatted exactly with ` +
@@ -464,15 +400,14 @@ async function runSession(client, { agent, school, module: moduleNum, section: s
       const block = extractBlock(responseText, markers.start, markers.end);
       if (block) {
         rl.close();
-        await finishSession({ block, stateFilePath, progressPath, historyPath, agent, moduleData, sectionData });
+        await finishSession({ block, stateFilePath, progressPath, historyPath, agent, moduleData });
         return;
       }
     }
   } catch (err) {
     saveHistory(historyPath, { ...historyMeta, messages });
     console.error(chalk.red(`\nError: ${err.message}`));
-    console.log(chalk.yellow(`Session saved. Resume with: node school.js resume ` +
-      `${school} ${agent} module-${moduleNum}${sectionNum ? ` section-${sectionNum}` : ''}`));
+    console.log(chalk.yellow(`Session saved. Resume with: node school.js resume ${school} ${agent} module-${moduleNum}`));
     rl.close();
     process.exit(1);
   }
@@ -487,13 +422,6 @@ function checkPrerequisites(agent, schoolDir, moduleNum, roadmap) {
   const moduleData = roadmap.modules.find(m => m.number === moduleNum);
 
   if (!moduleData) return { ok: false, missing: [`Module ${moduleNum} not found in roadmap`] };
-
-  if (agent === 'tester') {
-    const missing = moduleData.sections
-      .map(s => path.join(moduleDir, `section-${s.sectionIndex}`, 'teacher-assessment.md'))
-      .filter(p => !fs.existsSync(p));
-    return { ok: missing.length === 0, missing };
-  }
 
   if (agent === 'pm') {
     const p = path.join(moduleDir, 'test-results.md');
@@ -512,11 +440,10 @@ function checkPrerequisites(agent, schoolDir, moduleNum, roadmap) {
 
 function printUsage() {
   console.log(chalk.bold('\nUsage:'));
-  console.log('  node school.js teacher  {school}  module-N  section-M');
   console.log('  node school.js tester   {school}  module-N');
   console.log('  node school.js pm       {school}  module-N');
   console.log('  node school.js board    {school}  module-N');
-  console.log('  node school.js resume   {school}  {agent}   module-N  [section-M]');
+  console.log('  node school.js resume   {school}  {agent}   module-N');
   console.log('');
 }
 
@@ -526,33 +453,27 @@ function parseArgs(argv) {
   if (!agent || !school) { printUsage(); process.exit(1); }
 
   if (agent === 'resume') {
-    const [realAgent, moduleArg, sectionArg] = rest;
+    const [realAgent, moduleArg] = rest;
     if (!realAgent || !moduleArg) {
-      console.error(chalk.red('Usage: node school.js resume {school} {agent} module-N [section-M]'));
+      console.error(chalk.red('Usage: node school.js resume {school} {agent} module-N'));
       process.exit(1);
     }
     return {
       agent: realAgent,
       school,
       module: parseInt(moduleArg.replace('module-', '')),
-      section: sectionArg ? parseInt(sectionArg.replace('section-', '')) : null,
       forceResume: true,
     };
   }
 
   if (!MODELS[agent]) {
-    console.error(chalk.red(`Unknown agent: ${agent}. Valid agents: teacher, tester, pm, board`));
+    console.error(chalk.red(`Unknown agent: ${agent}. Valid agents: tester, pm, board`));
     process.exit(1);
   }
 
-  const [moduleArg, sectionArg] = rest;
+  const [moduleArg] = rest;
   if (!moduleArg) {
     console.error(chalk.red(`Module required. E.g.: node school.js ${agent} ${school} module-1`));
-    process.exit(1);
-  }
-
-  if (agent === 'teacher' && !sectionArg) {
-    console.error(chalk.red('Teacher requires a section. E.g.: node school.js teacher school-name module-1 section-1'));
     process.exit(1);
   }
 
@@ -560,7 +481,6 @@ function parseArgs(argv) {
     agent,
     school,
     module: parseInt(moduleArg.replace('module-', '')),
-    section: sectionArg ? parseInt(sectionArg.replace('section-', '')) : null,
     forceResume: false,
   };
 }
@@ -578,7 +498,7 @@ async function main() {
   if (argv.length === 0) { printUsage(); process.exit(0); }
 
   const parsed = parseArgs(argv);
-  const { agent, school, module: moduleNum, section: sectionNum } = parsed;
+  const { agent, school, module: moduleNum } = parsed;
 
   const schoolDir = path.join(SCHOOLS_DIR, school);
   if (!fs.existsSync(schoolDir)) {
@@ -603,9 +523,6 @@ async function main() {
   }
 
   const moduleData = roadmap.modules.find(m => m.number === moduleNum);
-  const sectionData = sectionNum != null
-    ? moduleData?.sections.find(s => s.sectionIndex === sectionNum)
-    : null;
 
   // Banner
   const width = 38;
@@ -616,7 +533,6 @@ async function main() {
   console.log(chalk.bold.blue('═'.repeat(width)));
   console.log(`  School:  ${chalk.cyan(school)}`);
   console.log(`  Module:  ${chalk.cyan(moduleData?.name ?? `Module ${moduleNum}`)}`);
-  if (sectionData) console.log(`  Section: ${chalk.cyan(sectionData.name)}`);
   console.log('');
 
   const client = new Anthropic({ apiKey });
